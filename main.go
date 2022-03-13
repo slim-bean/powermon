@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
+	"powermon/pkg/eg4"
+	"time"
 )
 import "go.bug.st/serial"
 
@@ -16,26 +19,39 @@ func main() {
 		log.Fatal(err)
 	}
 
-	n, err := port.Write([]byte{0x7E, 0x01, 0x01, 0x00, 0xFE, 0x0D})
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("Sent %v bytes\n", n)
-
-	buff := make([]byte, 100)
+	buff := make([]byte, 500)
 	for {
-		n, err := port.Read(buff)
+
+		n, err := port.Write([]byte{0x7E, 0x01, 0x01, 0x00, 0xFE, 0x0D})
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		n, err = port.Read(buff)
 		if err != nil {
 			log.Fatal(err)
 			break
 		}
-		if n == 0 {
-			fmt.Println("\nEOF")
-			break
+
+		if buff[0] == 0x7E && buff[n-1] == 0x0D {
+			//for i := 0; i < n; i++ {
+			//	fmt.Printf("%d:0x%02X ", i, buff[i])
+			//}
+			//fmt.Printf("\n\n")
+			packet, err := eg4.Parse(buff)
+			if err != nil {
+				fmt.Printf("Error parsing packet: %v\n", err)
+			}
+			ps, err := json.Marshal(packet)
+			if err != nil {
+				fmt.Printf("Failed to marshal packet to json: %v\n", err)
+			}
+			fmt.Println(string(ps))
+		} else {
+			fmt.Printf("Did not receive valid packet from battery, ignoring this poll.\n")
 		}
-		for i := 0; i < n; i++ {
-			fmt.Printf("0x%02X ", buff[i])
-		}
+
+		time.Sleep(1000 * time.Millisecond)
 		//fmt.Printf("0x%X ", string(buff[:n]))
 	}
 

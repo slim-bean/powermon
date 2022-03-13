@@ -51,7 +51,7 @@ Battery Cell voltage is the combination of the 2 bytes / 1000, example 3.315 Cel
 | 02    | 01     | 75 30           |
 | -     | -      | 30000           |
 
-It appears the battery current is the 2 bytes - 30000, in this packet the current is 0A
+It appears the battery current is the (30000 - 2 bytes)/100, in this packet the current is 0A
 
 ### Group 3
 
