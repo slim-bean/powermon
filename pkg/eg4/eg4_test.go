@@ -23,6 +23,14 @@ func Test_convertCell(t *testing.T) {
 			},
 			want: 3.315,
 		},
+		{
+			name: "ignore high byte MSB",
+			args: args{
+				high: 0x8D,
+				low:  0x9A,
+			},
+			want: 3.482,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

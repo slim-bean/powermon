@@ -155,7 +155,7 @@ func Parse(b []byte) (*EG4, error) {
 }
 
 func convertCell(high, low byte) float64 {
-	return float64(uint16(high)<<8|(uint16(low))) / 1000
+	return float64(uint16(high&0b01111111)<<8|(uint16(low))) / 1000
 }
 
 func convertAmps(high, low byte) float64 {

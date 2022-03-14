@@ -44,6 +44,8 @@ by `|`
 
 Battery Cell voltage is the combination of the 2 bytes / 1000, example 3.315 Cell 1
 
+I have seen the MSB of the high byte get set, not sure what this indicates but I've added a mask to ignore this bit: `HB&0b01111111<<8 | LB`
+
 ### Group 2
 
 | Group | Length | Battery Current |
@@ -95,9 +97,18 @@ I think for all the temperature values I'll just use the low byte and ignore the
 
 The lower byte of the second group seems to report what's in the "Alarm" field, and it reports the state of the battery running
 
-00 Nothing  
-01 Charging  
-02 Discharging
+I looked at the BMS app with a hex editor and it looks like the bits of the alarm low byte correspond to these alarms:
+
+| 8                              | 7                             | 6                        | 5                       | 4                       | 3                        | 2           | 1        |
+|--------------------------------|-------------------------------|--------------------------|-------------------------|-------------------------|--------------------------|-------------|----------|
+| Charging under temp protection | Charging over temp protection | Under voltage protection | Over voltage protection | Over Current Protection | Short Circuit Protection | Discharging | Charging | 
+
+I'm guessing here, but assuming the high byte is a continuation of the alarm values then if we look at the way they are stored in the binary they would have these values:
+
+| 8   | 7   | 6   | 5   | 4   | 3             | 2                                  | 1                                 |
+|-----|-----|-----|-----|-----|---------------|------------------------------------|-----------------------------------|
+|     |     |     |     |     | Serious Alarm | Environmental high temp protection | Environmental low temp protection |
+
 
 ### Group 7
 
