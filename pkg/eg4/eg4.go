@@ -24,6 +24,8 @@ func (s State) String() string {
 }
 
 type EG4 struct {
+	ID int `json:"id"`
+
 	Cell1  float64 `json:"cell_1"`
 	Cell2  float64 `json:"cell_2"`
 	Cell3  float64 `json:"cell_3"`
@@ -59,6 +61,9 @@ type EG4 struct {
 
 func Parse(b []byte) (*EG4, error) {
 	eg4 := &EG4{}
+
+	eg4.ID = int(b[1])
+
 	g := 4
 	l := 5
 	gb := 0x01

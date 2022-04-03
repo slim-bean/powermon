@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/prometheus/common/model"
 	"github.com/slim-bean/powermon/pkg/sigineer"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -66,11 +67,18 @@ func main() {
 		level.Error(logger).Log("msg", "failed to set port read timeout, continuing anyway", "err", err)
 	}
 
+	batt := 0
+	// I haven't been able to figure out the checksum, so instead I'm just hard coding the commands here.
+	commands := [][]byte{
+		{0x7E, 0x01, 0x01, 0x00, 0xFE, 0x0D},
+		{0x7E, 0x02, 0x01, 0x00, 0xFC, 0x0D},
+	}
+
 	go func() {
 		buff := make([]byte, 500)
 		for {
 			time.Sleep(1000 * time.Millisecond)
-			n, err := port.Write([]byte{0x7E, 0x01, 0x01, 0x00, 0xFE, 0x0D})
+			n, err := port.Write(commands[batt])
 			if err != nil {
 				level.Error(logger).Log("msg", "failed to send command on serial port", "err", err)
 				continue
@@ -82,7 +90,7 @@ func main() {
 				continue
 			}
 
-			if len(buff) > 0 && buff[0] == 0x7E && buff[n-1] == 0x0D {
+			if n > 0 && len(buff) > 0 && buff[0] == 0x7E && buff[n-1] == 0x0D {
 				packet, err := eg4.Parse(buff)
 				if err != nil {
 					level.Error(logger).Log("msg", "error parsing battery packet", "err", err)
@@ -106,6 +114,13 @@ func main() {
 				if err != nil {
 					level.Error(logger).Log("msg", "failed to send logs to loki client", "err", err)
 				}
+
+				// Move between batteries, only do this after a successful read or else you can get out of "time" with a battery
+				batt = batt + 1
+				// Currently only have 2 batteries, so if the address after increment is 3, move it back to 1
+				if batt > len(commands)-1 {
+					batt = 0
+				}
 			} else {
 				level.Error(logger).Log("msg", "did not receive valid packet from battery, ignoring this poll.")
 			}
@@ -126,41 +141,71 @@ func main() {
 		level.Error(logger).Log("msg", "failed to set port read timeout, continuing anyway", "err", err)
 	}
 
+	commandChan := make(chan string)
+	responseChan := make(chan string)
+
 	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
 		buff := make([]byte, 500)
 		for {
-			time.Sleep(1 * time.Second)
-			// Q1<cr>
-			n, err := inverterPort.Write([]byte{0x51, 0x31, 0x0D})
-			if err != nil {
-				level.Error(logger).Log("msg", "failed to send command on serial port", "err", err)
-				continue
-			}
+			select {
+			case command := <-commandChan:
+				n, err := inverterPort.Write([]byte(command))
+				if err != nil {
+					level.Error(logger).Log("msg", "failed to send command on serial port", "err", err)
+					continue
+				}
+				n, err = inverterPort.Read(buff)
+				if err != nil {
+					level.Error(logger).Log("msg", "failed to read from serial port", "err", err)
+					continue
+				}
+				resp := string(buff[:n])
+				responseChan <- resp
+			case <-t.C:
+				// Q1<cr>
+				// <cr>
+				n, err := inverterPort.Write([]byte{0x0D})
+				if err != nil {
+					level.Error(logger).Log("msg", "failed to send command on serial port", "err", err)
+					continue
+				}
 
-			n, err = inverterPort.Read(buff)
-			if err != nil {
-				level.Error(logger).Log("msg", "failed to read from serial port", "err", err)
-				continue
-			}
-			resp := string(buff[:n])
-			packet, err := sigineer.Parse(resp)
-			if err != nil {
-				level.Error(logger).Log("msg", "error parsing UPS packet", "err", err)
-				continue
-			}
-			ps, err := json.Marshal(packet)
-			if err != nil {
-				level.Error(logger).Log("msg", "failed to marshal UPS packet to json", "err", err)
-				continue
-			}
-			fmt.Println(resp)
-			fmt.Println(string(ps))
-			err = c.Handle(labels_inverter, time.Now(), string(ps))
-			if err != nil {
-				level.Error(logger).Log("msg", "failed to send logs to loki client", "err", err)
+				n, err = inverterPort.Read(buff)
+				if err != nil {
+					level.Error(logger).Log("msg", "failed to read from serial port", "err", err)
+					continue
+				}
+				resp := string(buff[:n])
+				packet, err := sigineer.Parse(resp)
+				if err != nil {
+					level.Error(logger).Log("msg", "error parsing UPS packet", "err", err)
+					continue
+				}
+				ps, err := json.Marshal(packet)
+				if err != nil {
+					level.Error(logger).Log("msg", "failed to marshal UPS packet to json", "err", err)
+					continue
+				}
+				fmt.Println(resp)
+				fmt.Println(string(ps))
+				err = c.Handle(labels_inverter, time.Now(), string(ps))
+				if err != nil {
+					level.Error(logger).Log("msg", "failed to send logs to loki client", "err", err)
+				}
 			}
 		}
 	}()
+
+	sh := commandHandler{
+		commandChan:  commandChan,
+		responseChan: responseChan,
+		logger:       logger,
+	}
+
+	http.HandleFunc("/command", sh.command)
+	go func() { http.ListenAndServe(":8080", nil) }()
 
 	done := make(chan struct{})
 
@@ -174,4 +219,28 @@ func main() {
 	}()
 
 	<-done
+}
+
+type commandHandler struct {
+	commandChan  chan string
+	responseChan chan string
+	logger       log.Logger
+}
+
+func (s *commandHandler) command(w http.ResponseWriter, req *http.Request) {
+	c := req.URL.Query().Get("command")
+	if c == "" {
+		fmt.Fprintf(w, "empty command query param\n")
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	c = c + "\r"
+	level.Info(s.logger).Log("msg", "sending command to inverter", "command", c)
+
+	s.commandChan <- c
+	level.Info(s.logger).Log("msg", "waiting for response")
+	r := <-s.responseChan
+	level.Info(s.logger).Log("msg", "received response", "response", r)
+	fmt.Fprintf(w, "response: %s", r)
+	w.WriteHeader(http.StatusOK)
 }
